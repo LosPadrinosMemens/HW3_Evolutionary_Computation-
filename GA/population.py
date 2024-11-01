@@ -1,6 +1,7 @@
 import random
 import numpy as np
-from utils import functions
+import pandas as pd
+from utils import *
 from Problems import *
 from GA import *
 import configparser
@@ -13,14 +14,20 @@ class Population:
     Parameters:
     - n_var (int): number of variables in the problem
     """
-    def __init__(self, objective_function, n_var=None, config_file='inputs/params.cfg', crossover_rate=0.8, mutation_factor=0.6, num_difference_vectors = 1, chromosomes = None):
-        self.generation_t = 0
-        self.load_config(config_file)
-        self.objective_function = problems.FunctionFactory.select_function(objective_function, n_var)
+    def __init__(self, objective_function, penalty = True, n_var=None, t= None, config_file=None, crossover_rate=0.8, mutation_factor=0.6, num_difference_vectors = 1, chromosomes = None):
+        self.generation_t = t if t is not None else 0
+        self.penalty = penalty
+        self.generation_statistics = {}
         
+        if isinstance(objective_function, str):
+            self.objective_function = problems.FunctionFactory.select_function(objective_function, n_var)
+        else:
+            raise ValueError("objective_function should be a string whose name is defined in Problems/problems.py")
+        
+        self.load_config(config_file)
         self.update_dynamic_factors()
     
-        self.chromosomes = chromosomes if chromosomes is not None else np.array([Chromosome(self.objective_function) for _ in range(self.pop_size)])
+        self.chromosomes = chromosomes if chromosomes is not None else np.array([Chromosome(self.objective_function, penalty = self.penalty) for _ in range(self.pop_size)])
         
         self.update_best()
 
@@ -34,6 +41,8 @@ class Population:
         self.mutation_factor = float(config['PopulationSettings']['mutation_factor']) 
         self.num_difference_vectors = int(config['PopulationSettings']['num_difference_vectors'])
         # Dynamic Penalty
+        self.max_penalty_exp = float(config['PenaltySettings']['max_penalty_exp'])
+        self.min_penalty_exp = float(config['PenaltySettings']['min_penalty_exp'])
         self.max_penalty_factor = float(config['PenaltySettings']['max_penalty_factor'])
         self.min_penalty_factor = float(config['PenaltySettings']['min_penalty_factor'])
         self.max_tolerance_factor = float(config['PenaltySettings']['max_tolerance_factor'])
@@ -43,25 +52,37 @@ class Population:
         progress = self.generation_t / self.max_generations
         penalty_factor = self.min_penalty_factor + progress * (self.max_penalty_factor - self.min_penalty_factor)
         tolerance_factor = self.max_tolerance_factor - progress * (self.max_tolerance_factor - self.min_tolerance_factor)
+        penalty_exp = self.min_penalty_exp + progress * (self.max_penalty_exp - self.min_penalty_exp)
         
-        self.objective_function.set_penalty_factors(penalty_factor, tolerance_factor)
+        self.objective_function.set_penalty_factors(penalty_factor, tolerance_factor, penalty_exp)
 
     def update_best(self):
         self.best_chromosome = min(self.chromosomes, key=lambda chromo: chromo.fitness)
 
-    def get_population_statistics(self):
+    def pass_next_generation(self):
         """
-        Calculate and return the best fitness, mean fitness, and standard deviation of the population.
-        Also updates the generation count that is used for eta_m in pbm
+        Calculates fitness, penalties and number of violations from best_chromosome, saves it into a dictionary and updates
+        generation count that is used for eta_m in pbm and as a stop criteria for evolve method
         """
-        fitness_values = np.array([chromo.fitness for chromo in self.chromosomes])
-        best_fitness = np.min(fitness_values)
-        mean_fitness = np.mean(fitness_values)
-        std_fitness = np.std(fitness_values)
-
+        self.update_best()
+        best_fitness, weighted_penalty, unweighted_penalty, num_violations =  self.best_chromosome.return_fitness()
+        
         self.generation_t += 1
         self.update_dynamic_factors()
-        return best_fitness, mean_fitness, std_fitness
+
+        self.generation_statistics[self.generation_t] = {
+            "best_fitness": best_fitness, # Does not consider penalty
+            "best_fitness_with_penalty": self.best_chromosome.fitness,
+            "weighted_penalty": weighted_penalty,
+            "unweighted_penalty": unweighted_penalty,
+            "num_violations": num_violations
+        }
+
+    def get_population_statistics(self):
+        """
+        Returns dictionary with information about best individual across generations
+        """
+        return self.generation_statistics
 
     def random_selection(self, with_replacement=False):
         """
@@ -103,9 +124,16 @@ class Population:
 
         self.chromosomes = np.array(winners[:self.pop_size])
 
+    def parent_vs_child_selection(self, offspring_population):
+        parent_fitness = np.array([parent.fitness for parent in self.chromosomes])
+        child_fitness = np.array([child.fitness for child in offspring_population])
+        mask = parent_fitness <= child_fitness
+        best_population = np.where(mask, self.chromosomes, offspring_population)
+        self.chromosomes = np.array(best_population)
+
     def differential_evolution(self, num_difference_vectors):
         """
-        Applies differential evolution to the population
+        Applies differential evolution to the population which generates a trial population
         """
         all_genes = np.array([chromo.genes for chromo in self.chromosomes])
         trial_genes = all_genes.copy() 
@@ -132,21 +160,32 @@ class Population:
 
         trial_chromosomes = [Chromosome(self.objective_function, genes=trial_genes[i]) for i in range(self.pop_size)]
 
-        return Population(self.pop_size, self.objective_function, len(trial_chromosomes[0].genes), self.crossover_rate, self.mutation_factor, chromosomes=np.array(trial_chromosomes))
+        return np.array(trial_chromosomes)
 
-
-    def binomial_crossover_and_selection(self):
+    def binomial_crossover(self, binary=False):
         """
-        Apply binomial crossover to the population with the trial population and selects the best for each pair.
+        Apply binomial or binary crossover to the population with the trial population and selects the best for each pair.
         """
         trial_population = self.differential_evolution(self.num_difference_vectors)
         offspring_population = []
 
-        for chromosome, trial in zip(self.chromosomes, trial_population.chromosomes):
-            offspring = chromosome.binomial_crossover_and_selection(trial, self.crossover_rate)
+        for chromosome, trial in zip(self.chromosomes, trial_population):
+            offspring = chromosome.binomial_crossover(trial, binary, self.crossover_rate)
             offspring_population.append(offspring)
     
-        self.chromosomes = np.array(offspring_population)
+        return np.array(offspring_population)
+
+    def stochastic_ranking(self, binary=False, Pf=0.45):
+        if self.penalty:
+            raise ValueError("Cannot perform Stochastic Ranking if penalty is included in fitness")
+        
+        offspring_population = self.binomial_crossover(binary)
+
+        combined_population = np.concatenate((self.chromosomes, offspring_population))
+
+        ranked_population = functions.stochastic_ranking(combined_population, Pf)
+
+        self.chromosomes = np.array(ranked_population[:self.pop_size])
 
     def sbx_and_pbm(self):
         """
@@ -165,6 +204,49 @@ class Population:
 
             child1.parameter_based_mutation(self.generation_t)
             child2.parameter_based_mutation(self.generation_t)
+
+            child1.apply_bounds()
+            child2.apply_bounds()
             offspring_population.extend([child1, child2])
 
         self.chromosomes = np.array(offspring_population[:self.pop_size])
+
+    def roulette_wheel_selection(self, replace=True):
+        """
+        Selects individuals from the population using roulette wheel selection.
+        """
+        fitness_values = np.array([chromo.fitness for chromo in self.chromosomes])
+        
+        if np.min(fitness_values) < 0:
+            fitness_values = fitness_values + np.abs(np.min(fitness_values))
+        
+        inverted_fitness_values = np.max(fitness_values) - fitness_values
+        total_fitness = np.sum(inverted_fitness_values)
+
+        if total_fitness == 0:
+            probabilities = np.ones(self.pop_size) / self.pop_size
+        else:
+            probabilities = inverted_fitness_values / total_fitness
+
+        selected_indices = np.random.choice(
+            self.pop_size, size=self.pop_size, replace=replace, p=probabilities
+        )
+        selected_chromosomes = [self.chromosomes[idx] for idx in selected_indices]
+        self.chromosomes = np.array(selected_chromosomes)
+
+    def evolve(self, algorithm_selection):
+        """
+        Evolve the population with either GA (random selection, sbx_and_pbm) or DE (dif. evolution, binomial crossover and selection)
+        """
+        while self.generation_t < self.max_generations:
+            if algorithm_selection == "GA":
+                self.roulette_wheel_selection()
+                self.sbx_and_pbm()
+            elif algorithm_selection == "DE+SR":
+                self.stochastic_ranking(binary=True, Pf=0.35)
+            elif algorithm_selection == "DE":
+                offspring_population = self.binomial_crossover(binary=True)
+                self.parent_vs_child_selection(offspring_population)
+
+            self.pass_next_generation()
+                

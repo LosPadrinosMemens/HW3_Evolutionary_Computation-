@@ -1,15 +1,17 @@
 import random
 import sympy as sp
 import numpy as np
-from utils import functions
+from utils import *
 
 class Chromosome:
     """
     Class for representing a real-encoded solution in the population.
     """
-    def __init__(self, objective_function, genes = None):
+    def __init__(self, objective_function, penalty = True, genes = None):
         self.__obj_func_singleton = objective_function
         self.genes = genes if genes is not None else self.initialize_genes()
+        self.apply_bounds()
+        self.penalty = penalty
         self.n = objective_function.get_nvar()
         self.calculate_fitness()
 
@@ -19,19 +21,32 @@ class Chromosome:
         return np.array([np.random.uniform(low, high) for low, high in zip(xmin, xmax)])
     
     def calculate_fitness(self):
-        self.fitness = self.__obj_func_singleton.evaluate(self.genes)
+        weighted_penalty, unweighted_penalty, _ = self.__obj_func_singleton.evaluate_penalty(self.genes)
+        if self.penalty: # penalty is included in fitness
+            self.fitness = self.__obj_func_singleton.evaluate(self.genes) + weighted_penalty
+        else: # fitness does not include penalty (for stochastic ranking)
+            self.fitness = self.__obj_func_singleton.evaluate(self.genes)
+            self.constraint_violation = weighted_penalty
 
-    def binomial_crossover_and_selection(self, trial, crossover_rate=0.8):
-        J = functions.set_J(self.n, crossover_rate)
-        offspring = Chromosome(self.__obj_func_singleton,genes=self.genes.copy())
+    def return_fitness(self):
+        fitness = self.__obj_func_singleton.evaluate(self.genes)
+        weighted_penalty, unweighted_penalty, num_violations = self.__obj_func_singleton.evaluate_penalty(self.genes)
+
+        return fitness, weighted_penalty, unweighted_penalty, num_violations
+
+    def apply_bounds(self):
+        xmin = self.__obj_func_singleton.get_xmin()
+        xmax = self.__obj_func_singleton.get_xmax()
+        self.genes = np.clip(self.genes, xmin, xmax)
+
+    def binomial_crossover(self, trial, binary = False, crossover_rate=0.8): # Binomial or Binary crossover
+        J = functions.set_J(self.n, binary, crossover_rate)
+        offspring = Chromosome(self.__obj_func_singleton, penalty = self.penalty, genes=self.genes.copy())
         for j in J:
             offspring.genes[j] = trial.genes[j]
         offspring.calculate_fitness()
         
-        if offspring.fitness < self.fitness:
-            return offspring
-        else:
-            return self
+        return offspring
 
     def sbx(self, other, u = None, nc = 2):
         b = functions.spread_factor(u, nc)
