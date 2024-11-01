@@ -76,6 +76,86 @@ class sphere(ObjectiveFunction):
         return sphere.__name__
    
 
+class Layeb05(ObjectiveFunction):        
+    def evaluate(self, x):
+        result = 0.0
+        for i in range(self.nvar - 1):
+            A = np.sin((x[i]- np.pi/2)) + np.cos(x[i+1]- np.pi)
+            B = np.cos(2*x[i]-x[i+1]+np.pi/2)
+            result = result + np.log(np.abs(A) + 0.001 )/ (np.abs(B) + 1)
+        return result
+    
+    def set_xmin(self):
+        for i in range(self.nvar):
+            self.xmin[i] = -10
+
+    def set_xmax(self):
+        for i in range(self.nvar):
+            self.xmax[i] = 10
+    
+    def get_name(self):
+        return sphere.__name__
+
+class Layeb10(ObjectiveFunction):        
+    def evaluate(self, x):
+        result = 0.0
+        for i in range(self.nvar - 1):
+            A = np.log(x[i]**2 + x[i+1]**2 + 0.5)
+            B = 100 * np.sin(x[i] + x[i+1])
+            result = result + A ** 2 + np.abs(B)
+        return result
+    
+    def set_xmin(self):
+        for i in range(self.nvar):
+            self.xmin[i] = -10
+
+    def set_xmax(self):
+        for i in range(self.nvar):
+            self.xmax[i] = 10
+    
+    def get_name(self):
+        return sphere.__name__
+
+class Layeb15(ObjectiveFunction):        
+    def evaluate(self, x):
+        result = 0.0
+        for i in range(self.nvar - 1):
+            A = np.sqrt(np.tanh(2*np.abs(x[i]) - x[i+1] ** 2 - 1))
+            B = np.exp(x[i]*x[i+1]+1)-1
+            result = result + 10*A + np.abs(B)
+        return result
+    
+    def set_xmin(self):
+        for i in range(self.nvar):
+            self.xmin[i] = -10
+
+    def set_xmax(self):
+        for i in range(self.nvar):
+            self.xmax[i] = 10
+    
+    def get_name(self):
+        return sphere.__name__
+
+class Layeb18(ObjectiveFunction):        
+    def evaluate(self, x):
+        result = 0.0
+        for i in range(self.nvar - 1):
+            A = np.cos(2*x[i]*x[i+1]/np.pi)
+            B = np.sin(x[i]+x[i+1])*np.cos([x[i]])
+            result = result + np.log(A + 0.001) / (np.abs(B) + 1)
+        return result
+    
+    def set_xmin(self):
+        for i in range(self.nvar):
+            self.xmin[i] = -10
+
+    def set_xmax(self):
+        for i in range(self.nvar):
+            self.xmax[i] = 10
+    
+    def get_name(self):
+        return sphere.__name__
+
 class rastringin(ObjectiveFunction):     
     def evaluate(self, x):
         result = 0.0
